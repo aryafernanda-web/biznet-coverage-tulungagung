@@ -1,0 +1,13 @@
+# Temp / generated locally
+railway_tmp.txt
+*.log
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Secrets
+.env
+.env.*

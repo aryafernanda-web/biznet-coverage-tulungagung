@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Check Coverage Area – Biznet Tulungagung</title>
+  <meta name="description" content="Cek coverage area Biznet Tulungagung, temukan DP terdekat beserta estimasi jarak kabel fiber optik." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="header-inner">
+      <div class="logo">
+        <span class="logo-icon">📡</span>
+        <div>
+          <div class="logo-title">Coverage Checker</div>
+          <div class="logo-sub">Biznet · Tulungagung</div>
+        </div>
+      </div>
+      <div class="header-badges">
+        <span class="badge covered">≤350m COVERED</span>
+        <span class="badge notcovered">&gt;350m NOT COVERED</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Sidebar -->
+  <div class="sidebar" id="sidebar">
+    <!-- Search -->
+    <div class="sidebar-section">
+      <label class="section-label">📍 Cari Lokasi</label>
+      <div class="search-wrap">
+        <input id="searchInput" type="text" placeholder="Alamat, koordinat, atau link Google Maps…" autocomplete="off" />
+        <button id="searchBtn" title="Cari">🔍</button>
+      </div>
+      <div id="searchSuggestions" class="suggestions"></div>
+      <button class="btn-gps" id="gpsBtn">
+        <span>📌</span> Gunakan Lokasi Saya (GPS)
+      </button>
+    </div>
+
+    <!-- Analysis Result -->
+    <div class="sidebar-section" id="resultSection" style="display:none">
+      <label class="section-label">📊 Hasil Analisis</label>
+      <div id="statusBadge" class="status-badge"></div>
+      <div id="resultList" class="result-list"></div>
+    </div>
+
+    <!-- POI Section -->
+    <div class="sidebar-section" id="poiSection" style="display:none">
+      <label class="section-label">🏪 Tempat Terdekat (300m)</label>
+      <div id="poiList" class="poi-list"></div>
+    </div>
+
+    <!-- Layer Toggles -->
+    <div class="sidebar-section">
+      <label class="section-label">🗺️ Layer Peta</label>
+      <div class="layer-toggles">
+        <label class="toggle-item">
+          <input type="checkbox" id="togDP" checked /> Tampilkan DP
+        </label>
+        <label class="toggle-item">
+          <input type="checkbox" id="togKabel" checked /> Tampilkan Jalur Kabel
+        </label>
+        <label class="toggle-item">
+          <input type="checkbox" id="togRailway" checked /> Tampilkan Jalur Kereta
+        </label>
+        <label class="toggle-item">
+          <input type="checkbox" id="togRiver" checked /> Tampilkan Perairan (Block)
+        </label>
+        <label class="toggle-item">
+           <input type="checkbox" id="togRoute" checked /> Tampilkan Rute Hasil
+        </label>
+      </div>
+    </div>
+
+    <!-- Legend -->
+    <div class="sidebar-section">
+      <label class="section-label">ℹ️ Keterangan</label>
+      <div class="legend">
+        <div class="legend-item"><span class="dot" style="background:#ef4444"></span> Drop Point (DP)</div>
+        <div class="legend-item"><span class="dot" style="background:#f97316"></span> Jalur Kabel Fiber</div>
+        <div class="legend-item"><span class="dot rail-dot"></span> Jalur Kereta (Block)</div>
+        <div class="legend-item"><span class="dot river-dot"></span> Sungai / Perairan (Block)</div>
+        <div class="legend-item"><span class="line-sample" style="background:#22c55e"></span> Rute COVERED</div>
+        <div class="legend-item"><span class="line-sample" style="background:#ef4444"></span> Rute NOT COVERED</div>
+        <div class="legend-item"><span class="line-sample" style="background:#f59e0b"></span> Rute BLOCKED</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Map -->
+  <div id="map"></div>
+
+  <!-- Measure Button -->
+  <button id="measureBtn" class="measure-btn" title="Ukur Jarak Manual">
+    <span style="font-size:20px">📏</span>
+    <span style="font-size:12px;font-weight:600;">Ukur</span>
+  </button>
+
+  <!-- Street View Button (floating on map) -->
+  <button id="svBtn" class="sv-btn" title="Lihat Street View 360°" onclick="openStreetView(userLatLng?.lat || -8.079, userLatLng?.lng || 111.903)">
+    <span style="font-size:20px">🔭</span>
+    <span style="font-size:12px;font-weight:600;">Street View</span>
+  </button>
+
+
+
+  <!-- Sidebar toggle mobile -->
+  <button class="sidebar-toggle" id="sidebarToggle">☰</button>
+
+  <!-- Loading overlay -->
+  <div id="loading" class="loading-overlay">
+    <div class="spinner"></div>
+    <div class="loading-text">Memuat data peta…</div>
+  </div>
+
+  <!-- Popup info click on map -->
+  <div id="mapClickHint" class="map-hint">Klik peta untuk pilih lokasi</div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="data.js"></script>
+  <script src="rivers.js"></script>
+  <script src="app.js"></script>
+
+</body>
+</html>
