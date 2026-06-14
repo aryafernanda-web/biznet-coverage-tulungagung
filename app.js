@@ -22,8 +22,8 @@ const OSRM_TABLE_PROFILES = [
   'https://router.project-osrm.org/table/v1/walking/'
 ];
 const COVER_DIST = 350; // meter (jarak dihitung sepanjang jaringan kabel)
-const MAX_RESULTS = 12;
-const CANDIDATE_POOL = 50; // DP yang diperiksa jarak jalan
+const MAX_RESULTS = 7;
+const CANDIDATE_POOL = 20; // DP yang diperiksa jarak jalan
 const SNAP_RADIUS = 1200; // meter – snap lokasi & DP ke jaringan kabel
 const USER_SNAP_COUNT = 6; // node kabel terdekat untuk titik pengguna
 const DP_SNAP_COUNT = 5;
@@ -808,28 +808,24 @@ async function getOsrmTableDistances(fromLat, fromLng, dps) {
   const out = new Map();
   if (!dps.length) return out;
 
-  const chunkSize = 12;
-  for (let i = 0; i < dps.length; i += chunkSize) {
-    const chunk = dps.slice(i, i + chunkSize);
-    const coordList = [`${fromLng},${fromLat}`];
-    chunk.forEach(dp => coordList.push(`${dp.lng},${dp.lat}`));
-    const coordStr = coordList.join(';');
-    const destIdx = chunk.map((_, j) => j + 1).join(';');
+  // Kirim semua sekaligus (pool sudah kecil, max 20)
+  const coordList = [`${fromLng},${fromLat}`];
+  dps.forEach(dp => coordList.push(`${dp.lng},${dp.lat}`));
+  const coordStr = coordList.join(';');
+  const destIdx = dps.map((_, j) => j + 1).join(';');
 
-    for (const base of OSRM_TABLE_PROFILES) {
-      const url = `${base}${coordStr}?sources=0&destinations=${destIdx}&annotations=distance`;
-      try {
-        const data = await fetchJson(url);
-        if (data.code !== 'Ok' || !data.distances?.[0]) continue;
-        data.distances[0].forEach((d, j) => {
-          if (d != null && d >= 0) out.set(chunk[j].id, d);
-        });
-        break;
-      } catch (e) {
-        console.warn('OSRM table error:', e);
-      }
+  for (const base of OSRM_TABLE_PROFILES) {
+    const url = `${base}${coordStr}?sources=0&destinations=${destIdx}&annotations=distance`;
+    try {
+      const data = await fetchJson(url);
+      if (data.code !== 'Ok' || !data.distances?.[0]) continue;
+      data.distances[0].forEach((d, j) => {
+        if (d != null && d >= 0) out.set(dps[j].id, d);
+      });
+      return out; // sukses, langsung return
+    } catch (e) {
+      console.warn('OSRM table error:', e);
     }
-    await delay(100);
   }
   return out;
 }
@@ -850,102 +846,171 @@ async function getOSRMRoute(fromLat, fromLng, toLat, toLng, useCache = false) {
 
   for (const base of OSRM_PROFILES) {
     const url = `${base}${coordStr}?${params}`;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const data = await fetchJson(url);
-        if (data.code !== 'Ok' || !data.routes?.[0]) {
-          if (attempt === 0) await delay(300);
-          continue;
-        }
-        const route = data.routes[0];
-        const result = {
-          coords: route.geometry.coordinates.map(c => [c[1], c[0]]),
-          dist: route.distance
-        };
-        if (useCache) osrmRouteCache.set(key, result);
-        return result;
-      } catch (e) {
-        if (attempt === 0) await delay(300);
-        else console.warn('OSRM route error:', base, e);
-      }
+    try {
+      const data = await fetchJson(url);
+      if (data.code !== 'Ok' || !data.routes?.[0]) continue;
+      const route = data.routes[0];
+      const result = {
+        coords: route.geometry.coordinates.map(c => [c[1], c[0]]),
+        dist: route.distance
+      };
+      if (useCache) osrmRouteCache.set(key, result);
+      return result;
+    } catch (e) {
+      console.warn('OSRM route error:', base, e.message);
     }
   }
   return null;
 }
 
 /* =========================================================
-   SEARCH
+   SEARCH  – robust Google Maps link resolver
    ========================================================= */
 let searchTimer;
+
+/* Ekstrak koordinat dari string URL apapun */
+function extractCoordsFromUrl(url) {
+  const patterns = [
+    /@(-?[\d.]+),(-?[\d.]+)/,
+    /!3d(-?[\d.]+)!4d(-?[\d.]+)/,
+    /[?&]q=(-?[\d.]+),(-?[\d.]+)/,
+    /[?&]ll=(-?[\d.]+),(-?[\d.]+)/,
+    /center=(-?[\d.]+)%2C(-?[\d.]+)/,
+    /\/(-?[\d]{1,3}\.[\d]+),(-?[\d]{1,3}\.[\d]+)\//
+  ];
+  for (const p of patterns) {
+    const m = url.match(p);
+    if (m) {
+      const lat = parseFloat(m[1]), lng = parseFloat(m[2]);
+      if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) return { lat, lng };
+    }
+  }
+  return null;
+}
+
+/* Resolve link pendek Google Maps — pakai Vercel API (server-side, paling andal) + fallback */
+async function resolveShortLink(shortUrl) {
+  // ── Metode 1: Vercel serverless (no CORS, ikuti redirect di server) ──
+  try {
+    const apiUrl = `/api/unshorten?url=${encodeURIComponent(shortUrl)}`;
+    const res = await fetch(apiUrl, { signal: AbortSignal.timeout(12000) });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.lat && data.lng) return { lat: data.lat, lng: data.lng };
+      if (data.finalUrl) {
+        const c = extractCoordsFromUrl(data.finalUrl);
+        if (c) return c;
+      }
+    }
+  } catch(e) { console.warn('Vercel API failed:', e.message); }
+
+  // ── Metode 2–4: proxy browser (fallback paralel) ──
+  const tryCoords = (c) => { if (!c) throw new Error('no coords'); return c; };
+
+  const methods = [
+    fetch(`https://unshorten.me/api/v1/unshorten?url=${encodeURIComponent(shortUrl)}`, {
+      signal: AbortSignal.timeout(9000)
+    }).then(r => r.json()).then(d => tryCoords(d.longurl ? extractCoordsFromUrl(d.longurl) : null)),
+
+    fetch(`https://r.jina.ai/${shortUrl}`, {
+      signal: AbortSignal.timeout(10000),
+      headers: { 'Accept': 'text/plain', 'X-Return-Format': 'text' }
+    }).then(r => r.text()).then(text => {
+      const gm = text.match(/https?:\/\/(?:www\.)?google\.com\/maps\/[^\s"')<]+/);
+      if (gm) { const c = extractCoordsFromUrl(decodeURIComponent(gm[0])); if (c) return c; }
+      return tryCoords(extractCoordsFromUrl(text));
+    }),
+
+    fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(shortUrl)}`, {
+      signal: AbortSignal.timeout(9000)
+    }).then(r => r.json()).then(data => {
+      let c = extractCoordsFromUrl(data?.status?.url || ''); if (c) return c;
+      c = extractCoordsFromUrl(data?.contents || ''); if (c) return c;
+      const m = (data?.contents||'').match(/"latitude":\s*(-?[\d.]+)[\s\S]*?"longitude":\s*(-?[\d.]+)/);
+      if (m) { const lat=parseFloat(m[1]),lng=parseFloat(m[2]); if(lat>=-90&&lat<=90) return {lat,lng}; }
+      throw new Error('no coords');
+    })
+  ];
+
+  try { return await Promise.any(methods); } catch { return null; }
+}
+
+
+
+/* Tampilkan panduan interaktif cara mendapatkan koordinat dari link pendek */
+function showShortLinkGuide() {
+  const old = document.getElementById('shortLinkGuideModal');
+  if (old) old.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'shortLinkGuideModal';
+  modal.style.cssText = `
+    position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.55);
+    display:flex;align-items:center;justify-content:center;padding:20px;
+  `;
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:16px;padding:24px;max-width:420px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+      <div style="font-size:22px;font-weight:700;color:#1a73e8;margin-bottom:6px;">🔗 Link Pendek Gagal Dibaca</div>
+      <p style="font-size:13px;color:#555;margin-bottom:16px;">Tidak bisa membaca <b>maps.app.goo.gl</b> secara otomatis. Coba cara ini:</p>
+      <div style="background:#f8f9fa;border-radius:10px;padding:14px;margin-bottom:14px;font-size:13px;color:#333;">
+        <b>📱 Cara 1 — Copy koordinat:</b><br>
+        Buka Google Maps → Tahan titik lokasi → Copy koordinat (contoh: <code>-8.079, 111.903</code>) → Paste di sini
+      </div>
+      <div style="background:#f8f9fa;border-radius:10px;padding:14px;margin-bottom:14px;font-size:13px;color:#333;">
+        <b>🖥️ Cara 2 — URL panjang:</b><br>
+        Buka link di browser → Copy URL dari address bar → Paste di sini
+      </div>
+      <div style="background:#e8f0fe;border-radius:10px;padding:14px;margin-bottom:18px;font-size:13px;color:#1a73e8;">
+        <b>💡 Cara 3 — Klik peta:</b><br>
+        Klik langsung pada lokasi yang Anda inginkan di peta
+      </div>
+      <button id="closeShortLinkGuide" style="width:100%;background:#1a73e8;color:#fff;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:600;cursor:pointer;">Mengerti</button>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  document.getElementById('closeShortLinkGuide').onclick = () => modal.remove();
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+}
+
 async function doSearch() {
   let q = document.getElementById('searchInput').value.trim();
   if (!q) return;
   const sugg = document.getElementById('searchSuggestions');
 
-  /* Handle Google Maps URLs */
+  /* ---- Google Maps URL (panjang atau pendek) ---- */
   if (q.includes('google.com/maps') || q.includes('maps.app.goo.gl') || q.includes('goo.gl/maps')) {
-    showToast("Memproses link lokasi...");
-    
-    let targetUrl = q;
-    
-    // Resolve short links via proxy
-    let coords = null;
-    if (q.includes('maps.app.goo.gl') || q.includes('goo.gl/maps')) {
-      try {
-        const proxyUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(q)}`;
-        const res = await fetch(proxyUrl);
-        const html = await res.text();
-        
-        // Google Sets coordinates in center=lat%2Clng tags or similar
-        const fallbackMatch = html.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/) || html.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/) || html.match(/center=(-?\d+\.\d+)%2C(-?\d+\.\d+)/);
-        if (fallbackMatch) {
-          coords = { lat: parseFloat(fallbackMatch[1]), lng: parseFloat(fallbackMatch[2]) };
-        } else {
-          targetUrl = res.url; // fetch automatically followed redirect!
-        }
-      } catch (e) {
-        console.warn("Unshorten failed, attempting regex anyway:", e);
-      }
-    }
 
-    if (!coords) {
-      // Comprehensive Regex for Google Maps coords if not found yet
-      const regexList = [
-        /@(-?\d+\.\d+),(-?\d+\.\d+)/,               // @lat,lng
-        /[q|ll|query]=(-?\d+\.\d+),(-?\d+\.\d+)/,   // q=lat,lng
-        /3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/             // 3d-lat!4dlng
-      ];
-      
-      for (const reg of regexList) {
-        const m = targetUrl.match(reg);
-        if (m) {
-          coords = { lat: parseFloat(m[1]), lng: parseFloat(m[2]) };
-          break;
-        }
-      }
+    // Coba langsung parse (URL panjang sudah ada koordinatnya)
+    let coords = extractCoordsFromUrl(q);
+
+    if (!coords && (q.includes('maps.app.goo.gl') || q.includes('goo.gl/maps'))) {
+      // Link pendek → coba resolve otomatis
+      showToast('🔍 Mengurai link pendek…');
+      coords = await resolveShortLink(q);
     }
 
     if (coords) {
+      map.setView([coords.lat, coords.lng], 17);
       onMapClick(coords);
       sugg.classList.remove('show');
-      return;
+      showToast(`✅ Titik ditemukan: ${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}`);
     } else {
-      alert("Link tidak dikenal atau koordinat tidak ditemukan. Gunakan Pin drop / URL browser.");
-      return;
+      showShortLinkGuide();
     }
+    return;
   }
 
-  /* Cek apakah input koordinat lat,lng */
-  const coordMatch = q.match(/^(-?\d+\.?\d*)[,\s]+(-?\d+\.?\d*)$/);
+  /* ---- Input koordinat langsung: -8.079, 111.903 ---- */
+  const coordMatch = q.match(/^(-?[\d.]+)[,\s]+(-?[\d.]+)$/);
   if (coordMatch) {
-    const lat = parseFloat(coordMatch[1]);
-    const lng = parseFloat(coordMatch[2]);
+    const lat = parseFloat(coordMatch[1]), lng = parseFloat(coordMatch[2]);
+    map.setView([lat, lng], 17);
     onMapClick({ lat, lng });
     sugg.classList.remove('show');
     return;
   }
 
-  /* Nominatim */
+  /* ---- Nominatim address search ---- */
   try {
     const res = await fetch(
       `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q + ' Tulungagung')}&format=json&limit=5`,
