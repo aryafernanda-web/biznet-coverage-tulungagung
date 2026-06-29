@@ -27,10 +27,11 @@ export default async function handler(req, res) {
 
     // Try to extract coordinates from the final URL directly
     const coordPatterns = [
-      /@(-?[\d.]+),(-?[\d.]+)/,
-      /!3d(-?[\d.]+)!4d(-?[\d.]+)/,
-      /[?&]q=(-?[\d.]+),(-?[\d.]+)/,
-      /[?&]ll=(-?[\d.]+),(-?[\d.]+)/,
+      /!3d(-?[\d.]+)!4d(-?[\d.]+)/,      // Place/Marker PIN (Exact)
+      /[?&]q=(-?[\d.]+),(-?[\d.]+)/,     // Search Query Pin (Exact)
+      /[?&]ll=(-?[\d.]+),(-?[\d.]+)/,    // Lat/Lng Parameter (Exact)
+      /\/(-?[\d]{1,3}\.[\d]+),(-?[\d]{1,3}\.[\d]+)\//, // Direct inline coordinates
+      /@(-?[\d.]+),(-?[\d.]+)/,          // Camera center (Fallback)
     ];
 
     for (const pattern of coordPatterns) {

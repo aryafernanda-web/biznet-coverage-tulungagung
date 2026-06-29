@@ -871,12 +871,12 @@ let searchTimer;
 /* Ekstrak koordinat dari string URL apapun */
 function extractCoordsFromUrl(url) {
   const patterns = [
-    /@(-?[\d.]+),(-?[\d.]+)/,
-    /!3d(-?[\d.]+)!4d(-?[\d.]+)/,
-    /[?&]q=(-?[\d.]+),(-?[\d.]+)/,
-    /[?&]ll=(-?[\d.]+),(-?[\d.]+)/,
-    /center=(-?[\d.]+)%2C(-?[\d.]+)/,
-    /\/(-?[\d]{1,3}\.[\d]+),(-?[\d]{1,3}\.[\d]+)\//
+    /!3d(-?[\d.]+)!4d(-?[\d.]+)/,      // Place/Marker PIN (Exact)
+    /[?&]q=(-?[\d.]+),(-?[\d.]+)/,     // Search Query Pin (Exact)
+    /[?&]ll=(-?[\d.]+),(-?[\d.]+)/,    // Lat/Lng Parameter (Exact)
+    /\/(-?[\d]{1,3}\.[\d]+),(-?[\d]{1,3}\.[\d]+)\//, // Direct inline coordinates
+    /@(-?[\d.]+),(-?[\d.]+)/,          // Camera center (Fallback)
+    /center=(-?[\d.]+)%2C(-?[\d.]+)/,  // center=lat%2Clng (Camera center - Fallback)
   ];
   for (const p of patterns) {
     const m = url.match(p);
